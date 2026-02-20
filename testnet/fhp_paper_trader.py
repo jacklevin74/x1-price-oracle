@@ -33,9 +33,10 @@ from config import PAPER_TRADING, TOKEN_PAIRS, TIMEFRAMES
 
 # Import FHP components
 try:
-    from oracle_phase_lock_consensus import PhaseLockConsensusEngine, Attestation
+    sys.path.insert(0, '/home/jack/.openclaw/workspace/built/autonomic/fhp_oracle_improvements')
+    from oracle_phase_lock_consensus import PhaseLockConsensusEngine, DataAttestation, OracleNode
     from tau_k_confidence_scorer import TauKConfidenceScorer, ConfidenceTier
-    from compositional_rewards_engine import CompositionalRewardsEngine, RewardSubmission
+    from compositional_rewards_engine import CompositionalRewardsEngine, DataSubmission, RewardCalculation
     FHP_AVAILABLE = True
 except ImportError as e:
     logging.warning(f"FHP components not available: {e}")
@@ -145,17 +146,14 @@ class FHPPaperTrader:
         # Initialize FHP consensus engine
         self.fhp_consensus = PhaseLockConsensusEngine(
             min_lock_quality=0.6,
-            memory_depth=50,
-            base_tau_k=1.0
+            memory_depth=50
         )
         
         # Initialize rewards engine
         self.fhp_rewards = CompositionalRewardsEngine(
             base_reward_rate=10.0,
-            max_reward_multiplier=20.0,
-            accuracy_weight=0.5,
-            timeliness_weight=0.3,
-            presence_weight=0.2
+            max_timeliness_bonus=2.0,
+            accuracy_threshold=0.95
         )
         
         # Register simulated oracle nodes
@@ -263,13 +261,14 @@ class FHPPaperTrader:
             observed_price = base_price * (1 + noise)
             
             # Submit attestation through FHP consensus
-            attestation = Attestation(
+            attestation = DataAttestation(
                 node_id=node_id,
                 data_value=observed_price,
                 local_observation=observed_price,  # Perfect lock for simulation
+                phase_lock_quality=1.0,
                 timestamp=datetime.now(),
-                stake=config['stake'],
-                tau_k=config['tau_k']
+                tau_k_at_lock=config['tau_k'],
+                coherence_field_strength=config['reliability']
             )
             attestations.append(attestation)
             
@@ -400,19 +399,19 @@ class FHPPaperTrader:
         # Calculate FHP reward
         if self.fhp_rewards and FHP_AVAILABLE:
             from datetime import datetime
-            submission = RewardSubmission(
+            submission = DataSubmission(
                 node_id='paper_trader',
-                oracle_id='fhp_oracle',
+                data_type='price',
                 data_value=position.entry_price,
                 consensus_value=exit_price,
+                submission_time=datetime.fromtimestamp(position.entry_time),
+                consensus_time=datetime.fromtimestamp(position.exit_time),
                 stake_amount=position.size,
-                timestamp=datetime.fromtimestamp(position.entry_time),
-                latency_seconds=position.exit_time - position.entry_time,
-                confidence_score=position.confidence
+                tau_k=position.tau_k
             )
             
-            reward = self.fhp_rewards.calculate_reward(submission)
-            position.reward_earned = reward.final_reward
+            reward_calc = self.fhp_rewards.calculate_reward(submission)
+            position.reward_earned = reward_calc.final_reward
         else:
             position.reward_earned = abs(position.pnl) * 0.1  # Legacy fallback
         
